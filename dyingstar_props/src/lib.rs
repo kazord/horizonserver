@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use horizon_event_system::{
-    CompressionType, create_simple_plugin, defObject, EventSystem, PlayerId, LogLevel, PluginError, ReplicationLayer, ReplicationPriority, ServerContext, SimplePlugin, Vec3, PlayerDisconnectedEvent
+    create_complete_horizon_system, CompressionType, create_simple_plugin, defObject, EventSystem, PlayerId, LogLevel, PluginError, ReplicationLayer, ReplicationPriority, ServerContext, SimplePlugin, Vec3, PlayerDisconnectedEvent, ClientConnectionRef
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -143,6 +143,9 @@ impl SimplePlugin for DyingstarPropsPlugin {
     async fn register_handlers(&mut self, events: Arc<EventSystem>, _context: Arc<dyn ServerContext>) -> Result<(), PluginError> {
         info!("🔧 DyingstarPropsPlugin: Registering event handlers...");
 
+        let (gevents, mut gorc_system) =  create_complete_horizon_system(_context.clone())
+            .map_err(|e| PluginError::ExecutionError(format!("failed to create complete horizon system: {}", e)))?;
+
         // Obtain the current Tokio runtime handle once (register_handlers runs inside runtime)
         // Try to use the current Tokio runtime if available. If not, create one and keep it alive.
         let mut owned_runtime: Option<Arc<tokio::runtime::Runtime>> = None;
@@ -181,6 +184,7 @@ impl SimplePlugin for DyingstarPropsPlugin {
             let rt = rt_handle_for_new_player.clone();
             // keep the owned runtime alive for the lifetime of the spawned task (if any)
             let _owned_rt = owned_runtime_clone.clone();
+            let mut gorc_system = gorc_system.clone();
             rt.spawn(async move {
                 println!("PROP Receive new player: {:?}", event);
                 info!("🔧 DyingstarPropsPlugin: ✅ New player connected: {} ({})", event.username, event.uuid);
@@ -207,11 +211,14 @@ impl SimplePlugin for DyingstarPropsPlugin {
 
                 let player = props::player::Player::new(
                     event.username.clone(),
-                    Vec3::new(18999588785.9, 13339.8, (-10386.2 + z)), // Vec3::new(15067000000.0, 12000.0, z),
+                    Vec3::new(18999588785.9, 13339.8, -10386.2 + z), // Vec3::new(15067000000.0, 12000.0, z),
                     Vec3::new(0.0, 0.0, 0.0),
                     event.internal_uuid.clone(),
                     event.uuid.clone(),
                 );
+
+                let player_gorc_id = gorc_system.register_object(player.clone(), player.position.clone()).await;
+
                 players.write().await.insert(PlayerId::from_str(&player.uuid).unwrap(), player.clone());
                 new_players.push(player.clone());
 
@@ -281,7 +288,7 @@ impl SimplePlugin for DyingstarPropsPlugin {
         let events_for_spawn = events.clone();
         let owned_runtime_for_spawn = owned_runtime.clone();
 
-        events.on_client("props", "spawn_request", move |event: serde_json::Value| {
+        events.on_client("props", "spawn_request", move |event: serde_json::Value, _player_id: PlayerId, _connection: ClientConnectionRef| {
             // prepare clones/local copies used by the async task so they are moved, not the outer variables
             let events = events_for_spawn.clone();
             let rt = rt_handle_for_new_player.clone();

@@ -7,6 +7,9 @@ authors = ["Your Name <your.email@example.com>"]
 license = "MIT"
 repository = "https://github.com/Far-Beyond-Dev/your-plugin"
 
+[package.metadata]
+documentation_url = "https://github.com/DyingStar-game/horizonserver/"
+
 [lib]
 crate-type = ["cdylib"]
 

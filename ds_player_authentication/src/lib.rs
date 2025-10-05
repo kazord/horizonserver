@@ -152,7 +152,7 @@ impl SimplePlugin for DsPlayerAuthenticationPlugin {
     //     // let db_pool = self.database_pool.clone();
     //     // TODO: Register your event handlers here
         let events_system = events.clone();
-        events.on_client("player", "init", move |event: PlayerInit| {
+        events.on_client("player", "init", move |event: PlayerInit, _player_id: PlayerId, _connection: ClientConnectionRef| {
             println!("plugin auth: Receive player init message {:?}", event);
 
             let events_system = events_system.clone();

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use horizon_event_system::{
-    create_simple_plugin, EventError, EventSystem, PlayerId, LogLevel, PluginError, ServerContext, SimplePlugin, ClientEventWrapper, PlayerDisconnectedEvent,
+    create_simple_plugin, EventError, EventSystem, PlayerId, LogLevel, PluginError, ServerContext, SimplePlugin, ClientEventWrapper, PlayerDisconnectedEvent, ClientConnectionRef
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -242,10 +242,10 @@ impl SimplePlugin for DsGameServerPlugin {
         }).await.unwrap();
 
         let websocket = Arc::clone(&self.websocket);
-        events.on_client_with_connection(
+        events.on_client(
             "movement",
             "update_position",
-            move |wrapper: ClientEventWrapper<serde_json::Value>, _connection| {
+            move |wrapper: ClientEventWrapper<serde_json::Value>, _player_id: PlayerId, _connection: ClientConnectionRef| {
                 info!("📝 LoggerPlugin: 🦘 Client movement from player {}", wrapper.player_id);
                 // println!("player movement {:?}", wrapper);
                 // println!("📝 LoggerPlugin: 🦘 Client movement");
@@ -285,10 +285,10 @@ impl SimplePlugin for DsGameServerPlugin {
 
 
         let websocket2 = Arc::clone(&self.websocket);
-        events.on_client_with_connection(
+        events.on_client(
             "actions",
             "action_pressed",
-            move |wrapper: ClientEventWrapper<serde_json::Value>, _connection| {
+            move |wrapper: ClientEventWrapper<serde_json::Value>, _player_id: PlayerId, _connection: ClientConnectionRef| {
                 info!("📝 LoggerPlugin: 🦘 Client action from player {}", wrapper.player_id);
  
                 let websocket = Arc::clone(&websocket2);
