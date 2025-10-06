@@ -152,7 +152,7 @@ impl SimplePlugin for DsGameServerPlugin {
                                         }
                                     });
                                 } else if value["namespace"] == "props" && value["event"] == "position" {
-                                    println!("Props position update received: {:?}", value);
+                                    // println!("Props position update received: {:?}", value);
                                     let payload = serde_json::json!({ "props": value["data"] });
                                     let events_clone = events2.clone();
                                     let _ = rt.block_on(async move {
@@ -199,7 +199,7 @@ impl SimplePlugin for DsGameServerPlugin {
 
         let websocket = Arc::clone(&self.websocket);
         events.on_plugin("gameserverplugin", "add_props", move |event: serde_json::Value| {
-            println!("🔧 DsGameServerPlugin: Adding props with event {:?}", event);
+            // println!("🔧 DsGameServerPlugin: Adding props with event {:?}", event);
             let message = json!({
                 "namespace": "server",
                 "event": "add_props",

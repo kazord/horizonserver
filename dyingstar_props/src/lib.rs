@@ -32,17 +32,25 @@ pub struct DyingstarPropsPlugin {
     planets: Arc<RwLock<HashMap<String, Testplanet>>>,
     // object_registry: Arc<GorcObjectRegistry>,
     players: Arc<RwLock<HashMap<PlayerId, Player>>>,
+    runtime: Arc<tokio::runtime::Runtime>,
 }
 
 impl DyingstarPropsPlugin {
     pub fn new() -> Self {
         info!("🔧 DyingstarPropsPlugin: Creating new instance");
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build plugin runtime"),
+        );
         Self {
             name: "dyingstar_props".to_string(),
             boxes50cm: Arc::new(RwLock::new(HashMap::new())),
             planets: Arc::new(RwLock::new(HashMap::new())),
             // object_registry: Arc::new(GorcObjectRegistry::new()),
             players: Arc::new(RwLock::new(HashMap::new())),
+            runtime,
         }
     }
 
@@ -143,49 +151,48 @@ impl SimplePlugin for DyingstarPropsPlugin {
     async fn register_handlers(&mut self, events: Arc<EventSystem>, _context: Arc<dyn ServerContext>) -> Result<(), PluginError> {
         info!("🔧 DyingstarPropsPlugin: Registering event handlers...");
 
-        let (gevents, mut gorc_system) =  create_complete_horizon_system(_context.clone())
-            .map_err(|e| PluginError::ExecutionError(format!("failed to create complete horizon system: {}", e)))?;
+        // Enter the plugin runtime only for the synchronous call that needs a reactor.
+        // Drop the EnterGuard before any .await so the register_handlers future remains Send.
+        let (gevents, mut gorc_system) = {
+            let _enter = self.runtime.handle().enter();
+            create_complete_horizon_system(_context.clone())
+        }.map_err(|e| PluginError::ExecutionError(format!("failed to create complete horizon system: {}", e)))?;
+ 
+        // clone the plugin runtime so sync handlers can spawn tasks onto it without requiring
+        // a reactor on the current thread.
+        let runtime_for_handlers = self.runtime.clone();
+        // separate clone for the client spawn_request handler (each handler should capture its own Arc<Runtime>)
+        let runtime_for_spawn = self.runtime.clone();
+        // create per-handler runtime clones so each `move` closure takes its own Arc and doesn't move the same value twice
+        let runtime_for_new_player = self.runtime.clone();
+        let runtime_for_players_update = self.runtime.clone();
+        let runtime_for_disconnect = self.runtime.clone();
+        let runtime_for_props_update = self.runtime.clone();
 
-        // Obtain the current Tokio runtime handle once (register_handlers runs inside runtime)
-        // Try to use the current Tokio runtime if available. If not, create one and keep it alive.
-        let mut owned_runtime: Option<Arc<tokio::runtime::Runtime>> = None;
-        let rt_handle = match tokio::runtime::Handle::try_current() {
-            Ok(h) => h,
-            Err(_) => {
-                let rt = Arc::new(
-                    tokio::runtime::Builder::new_multi_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|e| PluginError::ExecutionError(format!("failed to create runtime: {}", e)))?,
-                );
-                let handle = rt.handle().clone();
-                owned_runtime = Some(rt);
-                handle
-            }
-        };
 
-        // Make distinct clones of the runtime handle for each closure so none of them
-        // takes ownership of the original `rt_handle`.
-        let rt_handle_for_new_player = rt_handle.clone();
-        let rt_handle_for_position_update = rt_handle.clone();
+        // create per-handler clones of the GORC system so closures don't move the same value
+        let gorc_for_new_player = gorc_system.clone();
+        let gorc_for_spawn = gorc_system.clone();
+        let gorc_for_players_update = gorc_system.clone();
+        let gorc_for_disconnect = gorc_system.clone();
+        let gorc_for_props_update = gorc_system.clone();
+
+        // register_handlers runs inside an async runtime — spawn tasks directly with tokio::spawn
+        // (remove the previous runtime construction/Handle logic)
 
         // on_plugin expects a synchronous callback returning Result<_, EventError>.
-        // spawn a tokio task to perform async work inside the handler.
+        // spawn an async task to perform async work inside the handler.
         let players_clone = self.players.clone();
         let planets_clone = self.planets.clone();
         let events_clone = events.clone();
-        // clone owned_runtime to keep it alive inside the closure if we created one
-        let owned_runtime_clone = owned_runtime.clone();
         events.on_plugin("propsplugin", "new_player", move |event: NewPlayerData| {
             let players = players_clone.clone();
             let planets = planets_clone.clone();
             let events = events_clone.clone();
-            // use the captured runtime handle (may point to an existing runtime or the owned one)
-            let rt = rt_handle_for_new_player.clone();
-            // keep the owned runtime alive for the lifetime of the spawned task (if any)
-            let _owned_rt = owned_runtime_clone.clone();
-            let mut gorc_system = gorc_system.clone();
-            rt.spawn(async move {
+            // use the per-handler clone captured above
+            let mut gorc_system = gorc_for_new_player.clone();
+            let runtime = runtime_for_new_player.clone();
+            runtime.spawn(async move {
                 println!("PROP Receive new player: {:?}", event);
                 info!("🔧 DyingstarPropsPlugin: ✅ New player connected: {} ({})", event.username, event.uuid);
 
@@ -217,7 +224,7 @@ impl SimplePlugin for DyingstarPropsPlugin {
                     event.uuid.clone(),
                 );
 
-                let player_gorc_id = gorc_system.register_object(player.clone(), player.position.clone()).await;
+                gorc_system.add_player(PlayerId::from_str(&player.uuid).unwrap(), player.position.clone()).await;
 
                 players.write().await.insert(PlayerId::from_str(&player.uuid).unwrap(), player.clone());
                 new_players.push(player.clone());
@@ -280,37 +287,41 @@ impl SimplePlugin for DyingstarPropsPlugin {
             Ok(())
         }).await.unwrap();
 
-        let rt_handle_for_new_player = rt_handle.clone();
-        let rt_handle_for_position_update = rt_handle.clone();
+        // no runtime cloning needed; use tokio::spawn in handlers
 
         // create fresh clones for the spawn_request handler (avoid moving same Arc into multiple closures)
         let boxes50cm_for_spawn = self.boxes50cm.clone();
         let events_for_spawn = events.clone();
-        let owned_runtime_for_spawn = owned_runtime.clone();
+        // spawn requests will use tokio::spawn
 
         events.on_client("props", "spawn_request", move |event: serde_json::Value, _player_id: PlayerId, _connection: ClientConnectionRef| {
             // prepare clones/local copies used by the async task so they are moved, not the outer variables
             let events = events_for_spawn.clone();
-            let rt = rt_handle_for_new_player.clone();
-            let _owned_rt = owned_runtime_for_spawn.clone();
+            // we will spawn with tokio::spawn below
 
             // clone the event and the boxes Arc for the spawned async task
             let event_task = event.clone();
             let boxes_for_task = boxes50cm_for_spawn.clone();
 
-            rt.spawn(async move {
+            let runtime = runtime_for_spawn.clone();
+            let mut gorc_system = gorc_for_spawn.clone();
+            runtime.spawn(async move {
                 // check if event["type"] == "box50cm" or "box4m" or "ship" with match
                 match event_task["data"]["type"].as_str().unwrap_or("") {
                     "box50cm" => {
-                        println!("SPAWN BOX50CM YEAH");
+                        // println!("SPAWN BOX50CM YEAH");
                         // spawn box50cm
                         // create Box50cm and store it
-                        let box50cm = Box50cm::new(
+                        let mut box50cm = Box50cm::new(
                             Vec3::new(0.0, 0.0, 0.0),
                             Vec3::new(0.0, 0.0, 0.0),
                             "".to_string(),
                         );
                         let box50cm_id = uuid::Uuid::new_v4().to_string();
+
+
+                        let gorc_id = gorc_system.register_object(box50cm.clone(), box50cm.position.clone()).await;
+                        box50cm.gorc_id = Some(gorc_id);
 
                         // store box in boxes50cm (use the cloned Arc inside async task)
                         {
@@ -346,44 +357,22 @@ impl SimplePlugin for DyingstarPropsPlugin {
 
 
         let events_clone2 = events.clone();
-        let owned_runtime_clone2 = owned_runtime.clone();
-        // use the separate clone for the second handler
-        let rt_handle2 = rt_handle_for_position_update.clone();
+        // use tokio::spawn in this handler
         events.on_plugin("propsplugin", "players_position_update", move |event: serde_json::Value| {
- 
-            // TODO update position and rotation of the player
-            // println!("PROP Receive player position update: {:?}", event);
-            // search in players the player has uuid of event["player"]["player_id"]
-            // let player_id = event["player_id"].as_str().unwrap_or("");
-            // let new_position = event["player"]["pos"].as_array().unwrap_or(&vec![]);
-            // let new_rotation = event["player"]["rot"].as_array().unwrap_or(&vec![]);
-            // if player_id != "" && new_position.len() == 3 && new_rotation.len() == 3 {
-            //     let mut players = players_clone.write();
-            //     if let Some(player) = players.get_mut(player_id) {
-            //         player.position = Vec3::new(
-            //             new_position[0],
-            //             new_position[1],
-            //             new_position[2],
-            //         );
-            //         player.rotation = Vec3::new(
-            //             new_rotation[0],
-            //             new_rotation[1],
-            //             new_rotation[2],
-            //         );
-            //         // println!("Updated player position: {:?}", player);
-            //     }
-            // }
+            // Clone the incoming event for the spawned task so we don't move `event`
+            // out of the sync handler closure.
+            let event_task = event.clone();
 
+            // TODO update position and rotation of the player (use `event_task` if needed)
 
             // broadcast new position to all clients
             let events = events_clone2.clone();
-            let rt = rt_handle2.clone();
-            let _owned_rt = owned_runtime_clone2.clone();
-            rt.spawn(async move {
+            let runtime = runtime_for_players_update.clone();
+            runtime.spawn(async move {
                 let announcement = serde_json::json!({
                     "type": "update_props",
                     "planets": serde_json::json!([]),
-                    "players": event["players"],
+                    "players": event_task["players"],
                 });
 
                 if let Err(e) = events.broadcast(&announcement).await {
@@ -397,20 +386,18 @@ impl SimplePlugin for DyingstarPropsPlugin {
         // prepare clones for player-disconnected handler (no await in sync closure)
         let players_for_disconnect = self.players.clone();
         let events_for_disconnect = events.clone();
-        let rt_handle_for_disconnect = rt_handle_for_position_update.clone();
-        let owned_runtime_for_disconnect = owned_runtime.clone();
 
         events.on_core("player_disconnected", move |event: PlayerDisconnectedEvent| {
             // move clones into the handler
             let players = players_for_disconnect.clone();
             let events = events_for_disconnect.clone();
-            let rt = rt_handle_for_disconnect.clone();
-            let _owned_rt = owned_runtime_for_disconnect.clone();
+            // we'll spawn an async task with tokio::spawn
 
             let internal_uuid = event.player_id.clone();
 
             // spawn async task to use .await inside
-            rt.spawn(async move {
+            let runtime = runtime_for_disconnect.clone();
+            runtime.spawn(async move {
                 // println!("PROP Player disconnected event: {:?}", event);
                 // println!("PROP Player disconnected, list of players {:?}", players.read().await);
                 // acquire write lock to remove the player
@@ -437,17 +424,16 @@ impl SimplePlugin for DyingstarPropsPlugin {
 
 
         let events_clone3 = events.clone();
-        let owned_runtime_clone3 = owned_runtime.clone();
-        // use the separate clone for the second handler
-        let rt_handle3 = rt_handle_for_position_update.clone();
+        // use tokio::spawn in this handler
         events.on_plugin("propsplugin", "props_position_update", move |event: serde_json::Value| {
+            // clone event for the spawned task
+            let event_task = event.clone();
             let events = events_clone3.clone();
-            let rt = rt_handle3.clone();
-            let _owned_rt = owned_runtime_clone3.clone();
-            rt.spawn(async move {
+            let runtime = runtime_for_props_update.clone();
+            runtime.spawn(async move {
                 let announcement = serde_json::json!({
                     "type": "props_position_update",
-                    "props": event["props"],
+                    "props": event_task["props"],
                 });
 
                 if let Err(e) = events.broadcast(&announcement).await {
@@ -457,6 +443,34 @@ impl SimplePlugin for DyingstarPropsPlugin {
 
             Ok(())
         }).await.unwrap();
+
+        // Spawn the GORC tick loop in a dedicated OS thread with its own current-thread Tokio runtime.
+        // This avoids requiring the gorc tick future to be `Send`.
+        {
+            // take ownership of gorc_system
+            let mut gorc_loop = gorc_system;
+            std::thread::Builder::new()
+                .name("dyingstar-gorc-loop".into())
+                .spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("failed to build gorc loop runtime");
+
+                    rt.block_on(async move {
+                        loop {
+                            // Process GORC replication
+                            if let Err(e) = gorc_loop.tick().await {
+                                error!("GORC tick error: {}", e);
+                            }
+
+                            // Run at ~60Hz
+                            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+                        }
+                    });
+                })
+                .expect("failed to spawn gorc loop thread");
+        }
 
         info!("🔧 DyingstarPropsPlugin: ✅ All handlers registered successfully!");
         Ok(())

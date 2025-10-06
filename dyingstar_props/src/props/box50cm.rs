@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
-use horizon_event_system::{GorcObject, ReplicationLayer, ReplicationPriority, CompressionType, Vec3};
+use horizon_event_system::{GorcObject, GorcObjectId, ReplicationLayer, ReplicationPriority, CompressionType, Vec3};
 use uuid::Uuid;
 
 // Define the box50cm
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Box50cm {
+    pub gorc_id: Option<GorcObjectId>,
     /// 3D position in world space
     pub position: Vec3,
     pub rotation: Vec3,
@@ -23,6 +24,7 @@ impl Box50cm {
             uuid = Uuid::new_v4().to_string();
         }        
         Self {
+            gorc_id: None,
             position,
             rotation,
             uuid,
