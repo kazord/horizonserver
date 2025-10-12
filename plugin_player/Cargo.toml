@@ -7,14 +7,14 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-horizon_event_system = { workspace = true }
-luminal_rt = { workspace = true }
-tokio = { workspace = true }
-futures = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-async-trait = { workspace = true }
-dashmap = { workspace = true }
+horizon_event_system = { path = "../Horizon/crates/horizon_event_system" }
+luminal_rt = "0.3.0"
+tokio = { version = "1.46.1", features = ["full"] }
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.143"
+thiserror = "2.0.12"
+tracing = "0.1.41"
+async-trait = "0.1"
+dashmap = "6.1.0"
 chrono = { version = "0.4", features = ["serde"] }
