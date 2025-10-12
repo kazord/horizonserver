@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use horizon_event_system::{GorcObject, ReplicationLayer, ReplicationPriority, CompressionType, Vec3};
+use horizon_event_system::{GorcObject, ReplicationLayer, ReplicationPriority, CompressionType, Vec3, PlayerId};
 use uuid::Uuid;
 
 // Define the player
@@ -8,14 +8,15 @@ pub struct Player {
     pub name: String,
     pub position: Vec3,
     pub rotation: Vec3,
-    pub internal_uuid: String,
+    pub internal_uuid: PlayerId,
     pub uuid: String,
     pub equipment: Vec<String>,
     pub health: f32,
+    pub hs_player_id: PlayerId,
 }
 
 impl Player {
-    pub fn new(name: String, position: Vec3, rotation: Vec3, internal_uuid: String, mut uuid: String) -> Self {
+    pub fn new(name: String, position: Vec3, rotation: Vec3, internal_uuid: PlayerId, mut uuid: String, hs_player_id: PlayerId) -> Self {
         if uuid.is_empty() {
             uuid = Uuid::new_v4().to_string();
         }
@@ -27,6 +28,7 @@ impl Player {
             uuid,
             equipment: Vec::new(),
             health: 100.0,
+            hs_player_id,
         }
     }
 }
@@ -61,7 +63,6 @@ impl GorcObject for Player {
                 "name" => { data.insert("name".to_string(), serde_json::Value::String(self.name.clone())); },
                 "position" => { data.insert("position".to_string(), serde_json::to_value(&self.position)?); },
                 "rotation" => { data.insert("rotation".to_string(), serde_json::to_value(&self.rotation)?); },
-                "internal_uuid" => { data.insert("internal_uuid".to_string(), serde_json::Value::String(self.internal_uuid.clone())); },
                 "uuid" => { data.insert("uuid".to_string(), serde_json::Value::String(self.uuid.clone())); },
                 "equipment" => { data.insert("equipment".to_string(), serde_json::to_value(&self.equipment)?); },
                 "health" => { data.insert("health".to_string(), serde_json::Value::Number(serde_json::Number::from_f64(self.health as f64).unwrap())); },

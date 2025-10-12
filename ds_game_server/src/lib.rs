@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use horizon_event_system::{
-    create_simple_plugin, EventError, EventSystem, PlayerId, LogLevel, PluginError, ServerContext, SimplePlugin, ClientEventWrapper, PlayerDisconnectedEvent, ClientConnectionRef
+    create_simple_plugin, EventError, EventSystem, PlayerId, LogLevel, PluginError, ServerContext, SimplePlugin, ClientEventWrapper, PlayerDisconnectedEvent, ClientConnectionRef, GorcObjectId, Dest
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -149,6 +149,36 @@ impl SimplePlugin for DsGameServerPlugin {
                                     let _ = rt.block_on(async move {
                                         if let Err(e) = events_clone.emit_plugin("propsplugin", "players_position_update", &payload).await {
                                             tracing::error!("Failed to emit plugin event to propsplugin: {}", e);
+                                        }
+                                        // loop on value["data"] array
+                                        let players_newposition = value["data"].as_array().unwrap();
+                                        for p in players_newposition {
+                                            let new_pos = serde_json::json!({
+                                                "x": p["pos"]["x"],
+                                                "y": p["pos"]["y"],
+                                                "z": p["pos"]["z"]
+                                            });
+                                            let event = serde_json::json!({
+                                                "player_id": p["uuid"],
+                                                "new_position": new_pos,
+                                                "velocity": { "x": 10.0, "y": 0.0, "z": 5.0 },
+                                                "movement_state": 1,
+                                                "client_timestamp": "2024-01-15T10:30:45Z"
+                                            });
+                                            // println!("Updating position for player {} to {:?}", p["uuid"], new_pos);
+
+// emit_gorc_instance(ship_id, 0, "collision_detected", &GorcEvent {
+//     object_id: ship_id.to_string(),
+//     object_type: "SpaceShip".to_string(),
+//     channel: 0,
+//     data: serde_json::to_vec(&collision_data)?,
+//     priority: "Critical".to_string(),
+//     timestamp: current_timestamp(),
+// }).await?;
+
+                                            if let Err(e) = events_clone.emit_gorc_instance(GorcObjectId::from_str(p["uuid"].as_str().unwrap()).unwrap(), 0, "move", &event, Dest::Both).await {
+                                                error!("Failed to update player position via EventSystem: {}", e);
+                                            }
                                         }
                                     });
                                 } else if value["namespace"] == "props" && value["event"] == "position" {
