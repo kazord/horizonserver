@@ -5,9 +5,11 @@ let ws;
 let ws2;
 let step = 0;
 let messages = [];
+let player1_gorc_id = null;
+let player1_player_id = null;
 
 describe('WebSocket server 127.0.0.1:7040', function () {
-    this.timeout(5000);
+    this.timeout(50000);
 
 
     after(function (done) {
@@ -76,6 +78,8 @@ describe('WebSocket server 127.0.0.1:7040', function () {
                         // check first message is zone enter channel 0
                         const msg1 = JSON.parse(messages[0]);
                         checkMessagePlayerChannel0(msg1);
+                        player1_gorc_id = msg1.object_id;
+                        player1_player_id = msg1.player_id;
 
                         const msg2 = JSON.parse(messages[1]);
                         checkMessagePlayerChannel1(msg2);
@@ -92,6 +96,234 @@ describe('WebSocket server 127.0.0.1:7040', function () {
                 }, 1000);
             }, 1000);
         });
+    });
+
+    it('create a second player', function (done) {
+        // local collectors for each socket
+        const messages1 = [];
+        const messages2 = [];
+        let finished = false;
+        let t1, t2;
+
+        const cleanup = () => {
+            clearTimeout(t1);
+            clearTimeout(t2);
+            if (ws) {
+                ws.removeListener('message', handler1);
+                ws.removeListener('error', onError1);
+                ws.removeListener('close', onClose1);
+            }
+            if (ws2) {
+                ws2.removeListener('message', handler2);
+                ws2.removeListener('error', onError2);
+                ws2.removeListener('close', onClose2);
+            }
+        };
+
+        const fail = (err) => {
+            if (finished) return;
+            finished = true;
+            cleanup();
+            done(err);
+        };
+
+        const handler1 = (data) => messages1.push(data.toString());
+        const handler2 = (data) => messages2.push(data.toString());
+        const onError1 = (err) => fail(err);
+        const onError2 = (err) => fail(err);
+        const onClose1 = () => { if (!finished) fail(new Error('ws closed prematurely')); };
+        const onClose2 = () => { if (!finished) fail(new Error('ws2 closed prematurely')); };
+
+        // attach handlers to existing ws (or wait for it to open)
+        const ensureWsOpen = (cb) => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.on('message', handler1);
+                ws.on('error', onError1);
+                ws.on('close', onClose1);
+                return process.nextTick(cb);
+            }
+            // create/replace ws if missing
+            if (!ws) {
+                ws = new WebSocket('ws://127.0.0.1:7040');
+            }
+            ws.once('open', () => {
+                ws.on('message', handler1);
+                ws.on('error', onError1);
+                ws.on('close', onClose1);
+                cb();
+            });
+            ws.once('error', onError1);
+        };
+
+        // create ws2 and attach handlers
+        ws2 = new WebSocket('ws://127.0.0.1:7040');
+        ws2.on('message', handler2);
+        ws2.on('error', onError2);
+        ws2.on('close', onClose2);
+
+        // wait until both sockets are open, then start the test steps
+        let openCount = 0;
+        const markOpen = () => { if (++openCount === 2) startSteps(); };
+
+        ensureWsOpen(markOpen);
+        ws2.once('open', markOpen);
+        ws2.once('error', onError2);
+
+        function startSteps() {
+            // step 1: wait 1s to be sure we don't receive any message before init
+            t1 = setTimeout(() => {
+                try {
+                    expect(messages1).to.have.lengthOf(0);
+                    expect(messages2).to.have.lengthOf(0);
+                } catch (err) {
+                    return fail(err);
+                }
+
+                // step 2: send init on ws2
+                ws2.send(JSON.stringify({
+                    namespace: "player",
+                    event: "init",
+                    data: { login: "Hugo Lizoir", password: "pass" }
+                }));
+
+                // step 3: wait 1s to collect messages
+                t2 = setTimeout(() => {
+                    try {
+                        console.log("Messages for ws:", messages1);
+                        console.log("Messages for ws2:", messages2);
+                        // ws1 should receive 1 message about the new player
+                        // ws2 should receive 3 messages about itself + 3 messages about the first player
+                        expect(messages1).to.have.lengthOf(1);
+                        expect(messages2).to.have.lengthOf(6);
+                        finished = true;
+                        cleanup();
+                        done();
+                    } catch (err) {
+                        fail(err);
+                    }
+                }, 5000);
+            }, 1000);
+        }
+    });
+
+    it('Player 1 go very far away, second player will not receive message', function (done) {
+        const msgs1 = [];
+        const msgs2 = [];
+        let finished = false;
+        let t1, t2;
+
+        const cleanup = () => {
+            clearTimeout(t1);
+            clearTimeout(t2);
+            if (ws) {
+                ws.removeListener('message', handler1);
+                ws.removeListener('error', onError1);
+                ws.removeListener('close', onClose1);
+            }
+            if (ws2) {
+                ws2.removeListener('message', handler2);
+                ws2.removeListener('error', onError2);
+                ws2.removeListener('close', onClose2);
+            }
+        };
+
+        const fail = (err) => {
+            if (finished) return;
+            finished = true;
+            cleanup();
+            done(err);
+        };
+
+        const handler1 = (data) => msgs1.push(data.toString());
+        const handler2 = (data) => msgs2.push(data.toString());
+        const onError1 = (err) => fail(err);
+        const onError2 = (err) => fail(err);
+        const onClose1 = () => { if (!finished) fail(new Error('ws closed prematurely')); };
+        const onClose2 = () => { if (!finished) fail(new Error('ws2 closed prematurely')); };
+
+        // ensure ws and ws2 are open
+        const waitOpen = (socket, cb, onErr) => {
+            if (socket && socket.readyState === WebSocket.OPEN) return process.nextTick(cb);
+            if (!socket) return cb(new Error('socket missing'));
+            socket.once('open', cb);
+            socket.once('error', onErr);
+        };
+
+        // attach handlers
+        if (ws) {
+            ws.on('message', handler1);
+            ws.on('error', onError1);
+            ws.on('close', onClose1);
+        }
+        if (ws2) {
+            ws2.on('message', handler2);
+            ws2.on('error', onError2);
+            ws2.on('close', onClose2);
+        }
+
+        // wait both open, then send event
+        let openCount = 0;
+        const markOpen = (err) => {
+            if (err) return fail(err);
+            if (++openCount === 2) {
+                // send the gorc_event on ws
+                try {
+                    ws.send(JSON.stringify({
+                        "type": "gorc_event",
+                        "object_id": "GorcObjectId(" + player1_gorc_id + ")",
+                        "channel": 0,
+                        "event": "move",
+                        "data": {
+                            "player_id": player1_player_id,
+                            "new_position": {
+                            "x": 500000.0,
+                            "y": 1.0,
+                            "z": 1.0
+                            },
+                            "velocity":{
+                            "x": 10.0,
+                            "y": 1.0,
+                            "z": 1.0
+                            },
+                            "movement_state": 1,
+                            "client_timestamp": "2025-10-11T09:57:45Z"
+                        },
+                        "player_id": player1_player_id
+                    }));
+                } catch (err) {
+                    return fail(err);
+                }
+
+                // wait 500ms to ensure ws received a message
+                t1 = setTimeout(() => {
+                    try {
+                        if (msgs1.length < 1) {
+                            throw new Error(`Expected ws to receive at least 1 message, got ${msgs1.length}`);
+                        }
+                    } catch (err) {
+                        return fail(err);
+                    }
+
+                    // wait another 500ms to be sure ws2 receives nothing
+                    t2 = setTimeout(() => {
+                        try {
+                            if (msgs2.length !== 0) {
+                                console.log("msgs2:", msgs2);
+                                throw new Error(`Expected ws2 to receive 0 messages, got ${msgs2.length}`);
+                            }
+                            finished = true;
+                            cleanup();
+                            done();
+                        } catch (err) {
+                            fail(err);
+                        }
+                    }, 500);
+                }, 500);
+            }
+        };
+
+        waitOpen(ws, () => markOpen(), onError1);
+        waitOpen(ws2, () => markOpen(), onError2);
     });
 
 
