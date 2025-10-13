@@ -43,6 +43,15 @@ use horizon_event_system::{
 };
 use tracing::{debug, error};
 use crate::player::GorcPlayer;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewPlayerData {
+    pub username: String,
+    pub uuid: String,
+    pub internal_uuid: PlayerId,
+    pub hs_player_id: PlayerId,
+}
 
 /// Handles player connection events and integrates new players into the GORC system.
 /// 
@@ -77,28 +86,28 @@ use crate::player::GorcPlayer;
 /// Store mapping: 42 → GorcObjectId
 /// ```
 pub async fn handle_player_connected(
-    event: PlayerConnectedEvent,
+    event: NewPlayerData,
     players: Arc<DashMap<PlayerId, GorcObjectId>>,
     events: Arc<EventSystem>,
     luminal_handle: luminal::Handle,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    debug!("🎮 CONNECTION STEP 1: handle_player_connected called for player {}", event.player_id);
-    debug!("🎮 GORC: Processing player connection for player {}", event.player_id);
+    println!("🎮 CONNECTION STEP 1: handle_player_connected called for player {}", event.internal_uuid);
+    println!("🎮 GORC: Processing player connection for player {}", event.internal_uuid);
     
     let spawn_position = Vec3::new(0.0, 0.0, 0.0);
     
     // Verify GORC instances manager is available
     let Some(gorc_instances) = events.get_gorc_instances() else {
-        error!("🎮 GORC: ❌ No GORC instances manager available for player {}", event.player_id);
+        error!("🎮 GORC: ❌ No GORC instances manager available for player {}", event.internal_uuid);
         return Ok(()); // Not a fatal error, just log and continue
     };
     
-    debug!("🎮 GORC: ✅ GORC instances manager available, registering player {}", event.player_id);
+    println!("🎮 GORC: ✅ GORC instances manager available, registering player {}", event.internal_uuid);
     
     // Create a new GORC player object with default configuration
     let player = GorcPlayer::new(
-        event.player_id, 
-        format!("Player_{}", event.player_id), 
+        event.internal_uuid,
+        event.username, 
         spawn_position
     );
     
@@ -106,22 +115,22 @@ pub async fn handle_player_connected(
     let players_clone = players.clone();
     let events_clone = Arc::clone(&events);
     
-    debug!("🎮 GORC: Spawning async registration task for player {}", event.player_id);
+    println!("🎮 GORC: Spawning async registration task for player {}", event.internal_uuid);
     luminal_handle.spawn(async move {
-        debug!("🎮 GORC: Starting async registration for player {}", event.player_id);
+        println!("🎮 GORC: Starting async registration for player {}", event.internal_uuid);
         
         // Register the player object with GORC spatial system
         let gorc_id = gorc_instances.register_object(player, spawn_position).await;
         
         // Store the GORC ID for future operations (movement, cleanup, etc.)
-        players_clone.insert(event.player_id, gorc_id);
+        players_clone.insert(event.internal_uuid, gorc_id);
         
-        debug!("🎮 GORC: ✅ Player {} registered with GORC instance ID {:?} at position {:?}",
-            event.player_id, gorc_id, spawn_position);
+        println!("🎮 GORC: ✅ Player {} registered with GORC instance ID {:?} at position {:?}",
+            event.internal_uuid, gorc_id, spawn_position);
 
         // Send GORC object info to client on channel 0
         let gorc_info = serde_json::json!({
-            "player_id": event.player_id,
+            "player_id": event.internal_uuid,
             "object_id": gorc_id.to_string(),
             "position": spawn_position,
             "timestamp": chrono::Utc::now()
@@ -136,21 +145,21 @@ pub async fn handle_player_connected(
         ).await {
             error!("🎮 GORC: ❌ Failed to send GORC info to client: {}", e);
         } else {
-            debug!("🎮 GORC: ✅ Sent GORC object info to client: {}", gorc_info);
+            println!("🎮 GORC: ✅ Sent GORC object info to client: {}", gorc_info);
         }
 
         // CRITICAL: Trigger zone message distribution by updating player position
         // This ensures nearby players receive zone data for the new player
-        if let Err(e) = events_clone.update_player_position(event.player_id, spawn_position).await {
+        if let Err(e) = events_clone.update_player_position(event.internal_uuid, spawn_position).await {
             error!("🎮 GORC: ❌ Failed to update player position via EventSystem: {}", e);
         } else {
-            debug!("🎮 GORC: ✅ EventSystem.update_player_position completed successfully");
+            println!("🎮 GORC: ✅ EventSystem.update_player_position completed successfully");
         }
         
         // Add player to GORC spatial tracking system (after zone messages are sent)
-        gorc_instances.add_player(event.player_id, spawn_position).await;
-        
-        debug!("🎮 GORC: ✅ Player {} fully integrated into GORC system", event.player_id);
+        gorc_instances.add_player(event.internal_uuid, spawn_position).await;
+
+        println!("🎮 GORC: ✅ Player {} fully integrated into GORC system", event.internal_uuid);
     });
     
     Ok(())

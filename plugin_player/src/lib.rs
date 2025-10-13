@@ -70,6 +70,7 @@ use horizon_event_system::{
 };
 use std::sync::Arc;
 use tracing::{ debug, error };
+use serde::{Deserialize, Serialize};
 
 // Public modules for external access
 pub mod events;
@@ -314,39 +315,74 @@ impl PlayerPlugin {
         let events_for_conn = Arc::clone(&events);
         let luminal_handle_connect = luminal_handle.clone();
 
-        events
-            .on_core("player_connected", move |event: serde_json::Value| {
-                let players = players_conn.clone();
-                let events = events_for_conn.clone();
-                let handle = luminal_handle_connect.clone();
+        events.on_plugin("gorcplugin", "new_player", move |event: NewPlayerData| {
+            println!("🎮 PlayerPlugin: received new_player event!");
+            let players = players_conn.clone();
+            let events = events_for_conn.clone();
+            let handle = luminal_handle_connect.clone();
 
-                // Use the dedicated connection handler
-                let handle_clone = handle.clone();
-                handle.spawn(async move {
-                    match
-                        serde_json::from_value::<horizon_event_system::PlayerConnectedEvent>(event)
-                    {
-                        Ok(player_event) => {
-                            if
-                                let Err(e) = handle_player_connected(
-                                    player_event,
-                                    players,
-                                    events,
-                                    handle_clone
-                                ).await
-                            {
-                                error!("🎮 Failed to handle player connection: {}", e);
-                            }
+            // Use the dedicated connection handler
+            let handle_clone = handle.clone();
+            handle.spawn(async move {
+                // match
+                //     serde_json::from_value::<horizon_event_system::PlayerConnectedEvent>(event)
+                // {
+                    // Ok(player_event) => {
+                        if
+                            let Err(e) = handle_player_connected(
+                                event,
+                                players,
+                                events,
+                                handle_clone
+                            ).await
+                        {
+                            error!("🎮 Failed to handle player connection: {}", e);
                         }
-                        Err(e) => {
-                            error!("🎮 Failed to deserialize PlayerConnectedEvent: {}", e);
-                        }
-                    }
-                });
+                    // }
+                    // Err(e) => {
+                    //     error!("🎮 Failed to deserialize PlayerConnectedEvent: {}", e);
+                    // }
+                // }
+            });
 
-                Ok(())
-            }).await
-            .map_err(|e| PluginError::ExecutionError(e.to_string()))?;
+            Ok(())
+        }).await
+        .map_err(|e| PluginError::ExecutionError(e.to_string()))?;
+
+
+        // events
+        //     .on_core("player_connected", move |event: serde_json::Value| {
+        //         let players = players_conn.clone();
+        //         let events = events_for_conn.clone();
+        //         let handle = luminal_handle_connect.clone();
+
+        //         // Use the dedicated connection handler
+        //         let handle_clone = handle.clone();
+        //         handle.spawn(async move {
+        //             match
+        //                 serde_json::from_value::<horizon_event_system::PlayerConnectedEvent>(event)
+        //             {
+        //                 Ok(player_event) => {
+        //                     if
+        //                         let Err(e) = handle_player_connected(
+        //                             player_event,
+        //                             players,
+        //                             events,
+        //                             handle_clone
+        //                         ).await
+        //                     {
+        //                         error!("🎮 Failed to handle player connection: {}", e);
+        //                     }
+        //                 }
+        //                 Err(e) => {
+        //                     error!("🎮 Failed to deserialize PlayerConnectedEvent: {}", e);
+        //                 }
+        //             }
+        //         });
+
+        //         Ok(())
+        //     }).await
+        //     .map_err(|e| PluginError::ExecutionError(e.to_string()))?;
 
         // Register player disconnection handler
         let players_disc = Arc::clone(&self.players);

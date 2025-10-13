@@ -173,7 +173,7 @@ impl SimplePlugin for DsPlayerAuthenticationPlugin {
 
                 rt.block_on(async move {
                     if let Err(e) = events_system
-                        .emit_plugin("propsplugin", "new_player", &serde_json::json!({
+                        .emit_plugin("gorcplugin", "new_player", &serde_json::json!({
                             "username": event.data.login,
                             "uuid": Uuid::new_v4().to_string(),
                             "internal_uuid": event.player_id,
